@@ -15,6 +15,7 @@ func TestAccOktaDefaultPasswordPolicy(t *testing.T) {
 	updatedConfig := mgr.GetFixtures("basic_updated.tf", ri, t)
 	resourceName := fmt.Sprintf("%s.test", policyPasswordDefault)
 
+	// NOTE needs the "Security Question" authenticator enabled on the org
 	resource.Test(t, resource.TestCase{
 		PreCheck:          testAccPreCheck(t),
 		ErrorCheck:        testAccErrorChecks(t),
@@ -27,6 +28,7 @@ func TestAccOktaDefaultPasswordPolicy(t *testing.T) {
 					ensurePolicyExists(resourceName),
 					resource.TestCheckResourceAttr(resourceName, "status", statusActive),
 					resource.TestCheckResourceAttr(resourceName, "sms_recovery", statusActive),
+					resource.TestCheckResourceAttr(resourceName, "password_history_count", "5"),
 				),
 			},
 			{
@@ -35,6 +37,16 @@ func TestAccOktaDefaultPasswordPolicy(t *testing.T) {
 					ensurePolicyExists(resourceName),
 					resource.TestCheckResourceAttr(resourceName, "status", statusActive),
 					resource.TestCheckResourceAttr(resourceName, "sms_recovery", statusInactive),
+					resource.TestCheckResourceAttr(resourceName, "password_history_count", "0"),
+				),
+			},
+			{
+				RefreshState: true,
+				Check: resource.ComposeTestCheckFunc(
+					ensurePolicyExists(resourceName),
+					resource.TestCheckResourceAttr(resourceName, "status", statusActive),
+					resource.TestCheckResourceAttr(resourceName, "sms_recovery", statusInactive),
+					resource.TestCheckResourceAttr(resourceName, "password_history_count", "0"),
 				),
 			},
 			{
@@ -43,6 +55,7 @@ func TestAccOktaDefaultPasswordPolicy(t *testing.T) {
 					ensurePolicyExists(resourceName),
 					resource.TestCheckResourceAttr(resourceName, "status", statusActive),
 					resource.TestCheckResourceAttr(resourceName, "sms_recovery", statusActive),
+					resource.TestCheckResourceAttr(resourceName, "password_history_count", "5"),
 				),
 			},
 		},

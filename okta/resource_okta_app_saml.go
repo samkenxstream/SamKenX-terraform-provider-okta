@@ -417,6 +417,12 @@ func resourceAppSaml() *schema.Resource {
 				Computed:    true,
 				Description: "The url that can be used to embed this application in other portals.",
 			},
+			"saml_signed_request_enabled": {
+				Type:        schema.TypeBool,
+				Optional:    true,
+				Description: "SAML Signed Request enabled",
+				Default:     false,
+			},
 		}),
 		Timeouts: &schema.ResourceTimeout{
 			Create: schema.DefaultTimeout(1 * time.Hour),
@@ -467,7 +473,7 @@ func resourceAppSamlCreate(ctx context.Context, d *schema.ResourceData, m interf
 	// New applications (other than Office365, Radius, and MFA) are assigned to the default Policy.
 	// TODO: determine how to inspect app for MFA status
 	if app.Name != "office365" && app.Name != "radius" {
-		err = setAuthenticationPolicy(ctx, d, m, app.Id)
+		err = createOrUpdateAuthenticationPolicy(ctx, d, m, app.Id)
 		if err != nil {
 			return diag.Errorf("failed to set authentication policy for an SAML application: %v", err)
 		}
@@ -485,6 +491,7 @@ func resourceAppSamlRead(ctx context.Context, d *schema.ResourceData, m interfac
 		d.SetId("")
 		return nil
 	}
+	setAuthenticationPolicy(d, app.Links)
 	if app.Settings != nil {
 		if app.Settings.SignOn != nil {
 			err = setSamlSettings(d, app.Settings.SignOn)
@@ -599,7 +606,7 @@ func resourceAppSamlUpdate(ctx context.Context, d *schema.ResourceData, m interf
 			return diag.Errorf("failed to upload logo for SAML application: %v", err)
 		}
 	}
-	err = setAuthenticationPolicy(ctx, d, m, app.Id)
+	err = createOrUpdateAuthenticationPolicy(ctx, d, m, app.Id)
 	if err != nil {
 		return diag.Errorf("failed to set authentication policy for an SAML application: %v", err)
 	}
@@ -650,21 +657,22 @@ func buildSamlApp(d *schema.ResourceData) (*okta.SamlApplication, error) {
 	// Note: You can't currently configure provisioning features via the API. Use the administrator UI.
 	// app.Features = convertInterfaceToStringSet(d.Get("features"))
 	app.Settings.SignOn = &okta.SamlApplicationSettingsSignOn{
-		DefaultRelayState:     d.Get("default_relay_state").(string),
-		SsoAcsUrl:             d.Get("sso_url").(string),
-		Recipient:             d.Get("recipient").(string),
-		Destination:           d.Get("destination").(string),
-		Audience:              d.Get("audience").(string),
-		IdpIssuer:             d.Get("idp_issuer").(string),
-		SubjectNameIdTemplate: d.Get("subject_name_id_template").(string),
-		SubjectNameIdFormat:   d.Get("subject_name_id_format").(string),
-		ResponseSigned:        &responseSigned,
-		AssertionSigned:       &assertionSigned,
-		SignatureAlgorithm:    d.Get("signature_algorithm").(string),
-		DigestAlgorithm:       d.Get("digest_algorithm").(string),
-		HonorForceAuthn:       &honorForce,
-		AuthnContextClassRef:  d.Get("authn_context_class_ref").(string),
-		Slo:                   &okta.SingleLogout{Enabled: boolPtr(false)},
+		DefaultRelayState:        d.Get("default_relay_state").(string),
+		SsoAcsUrl:                d.Get("sso_url").(string),
+		Recipient:                d.Get("recipient").(string),
+		Destination:              d.Get("destination").(string),
+		Audience:                 d.Get("audience").(string),
+		IdpIssuer:                d.Get("idp_issuer").(string),
+		SubjectNameIdTemplate:    d.Get("subject_name_id_template").(string),
+		SubjectNameIdFormat:      d.Get("subject_name_id_format").(string),
+		ResponseSigned:           &responseSigned,
+		AssertionSigned:          &assertionSigned,
+		SignatureAlgorithm:       d.Get("signature_algorithm").(string),
+		DigestAlgorithm:          d.Get("digest_algorithm").(string),
+		HonorForceAuthn:          &honorForce,
+		AuthnContextClassRef:     d.Get("authn_context_class_ref").(string),
+		Slo:                      &okta.SingleLogout{Enabled: boolPtr(false)},
+		SamlSignedRequestEnabled: boolPtr(d.Get("saml_signed_request_enabled").(bool)),
 	}
 	sli := d.Get("single_logout_issuer").(string)
 	if sli != "" {
@@ -690,8 +698,8 @@ func buildSamlApp(d *schema.ResourceData) (*okta.SamlApplication, error) {
 		acsEndpointsObj := make([]*okta.AcsEndpoint, len(acsEndpoints))
 		for i := range acsEndpoints {
 			acsEndpointsObj[i] = &okta.AcsEndpoint{
-				Index: int64(i),
-				Url:   acsEndpoints[i],
+				IndexPtr: int64Ptr(i),
+				Url:      acsEndpoints[i],
 			}
 		}
 		allowMultipleAcsEndpoints = true
@@ -754,6 +762,16 @@ func tryCreateCertificate(ctx context.Context, d *schema.ResourceData, m interfa
 
 		// Set ID and the read done at the end of update and create will do the GET on metadata
 		_ = d.Set("key_id", key.Kid)
+		client := getOktaClientFromMetadata(m)
+		app, err := buildSamlApp(d)
+		if err != nil {
+			return err
+		}
+
+		_, _, err = client.Application.UpdateApplication(ctx, appID, app)
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil
